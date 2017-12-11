@@ -1,0 +1,4 @@
+entities_to_sync:
+  - node
+  - user
+

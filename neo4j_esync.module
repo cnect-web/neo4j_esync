@@ -35,8 +35,9 @@ function neo4j_esync_entity_insert(EntityInterface $entity) {
   $entity_type = $entity->getEntityType()->id();
   $entity_type_label = $entity->getEntityType()->getLabel();
 
-  $insert_types = ['user', 'node', 'comment'];
-  if (in_array($entity_type, $insert_types)) {
+  $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
+
+  if (in_array($entity_type, $sync_entities)) {
     $client = \Drupal::service('neo4j.client');
     $query = "CREATE ({$entity_type}:{$entity_type_label}) SET {$entity_type} += {parameters}";
     $query_params = [
@@ -59,8 +60,9 @@ function neo4j_esync_entity_delete(EntityInterface $entity) {
   $entity_type = $entity->getEntityType()->id();
   $entity_type_label = $entity->getEntityType()->getLabel();
 
-  $insert_types = ['user', 'node'];
-  if (in_array($entity_type, $insert_types)) {
+  // Maybe not needed to check?
+  $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
+  if (in_array($entity_type, $sync_entities)) {
     $client = \Drupal::service('neo4j.client');
     $query = "MATCH (n {drupal_entity_type: \"{$entity_type}\", id: \"{$entity->id()}\"}) DETACH DELETE n";
     $client->run($query, $query_params);

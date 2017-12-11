@@ -21,25 +21,25 @@ class AdminConfig extends ConfigFormBase {
     $sync_entities = $this->config('neo4j_esync.settings')->get('entities_to_sync');
 
     $available_entities = \Drupal::entityTypeManager()->getDefinitions();
-    $available_entities_keys = array_keys($available_entities);
+    $options = [];
+
+    foreach ($available_entities as $key => $entity_type) {
+      $options[$key] = $entity_type->getLabel();
+    }
 
     $form['entities_to_sync'] = [
       '#title' => $this->t('Entities to Sync'),
       '#type' => 'checkboxes',
-      '#options' => $available_entities_keys,
-      '#default_value' => isset($sync_entities) ? $sync_entities : [],
+      '#options' => $options,
+      '#default_value' => !empty($sync_entities) ? $sync_entities : ['node', 'user'],
     ];
 
     return parent::buildForm($form, $form_state);
   }
 
   public function submitForm(array &$form, FormStateInterface $form_state) {
-    /*
-    $connection = $form_state->get('connection');
-
-    $this->config('neo4j.connection')->set('connection', $connection)->save();
-
+    $entities_to_sync = array_filter($form_state->getValue('entities_to_sync'));
+    $this->config('neo4j_esync.settings')->set('entities_to_sync', $entities_to_sync)->save();
     parent::submitForm($form, $form_state);
-    */
   }
 }
