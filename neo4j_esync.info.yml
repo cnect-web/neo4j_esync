@@ -1,0 +1,7 @@
+name: Neo4j Entity Sync
+type: module
+description: Syncs Drupal entities with Neo4j.
+core: 8.x
+package: Custom
+dependencies:
+  - neo4j

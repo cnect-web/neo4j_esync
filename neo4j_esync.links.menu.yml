@@ -1,0 +1,5 @@
+neo4j_esync.admin.settings:
+  title: 'Neo4j Entity Sync settings'
+  route_name: neo4j_esync.settings
+  parent: neo4j.admin
+  weight: 1

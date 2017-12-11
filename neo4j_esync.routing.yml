@@ -1,0 +1,15 @@
+neo4j_esync.admin:
+  path: '/admin/config/neo4j/esync'
+  defaults:
+    _controller: '\Drupal\system\Controller\SystemController::systemAdminMenuBlockPage'
+    _title: 'Neo4j Entity Sync admin'
+  requirements:
+    _permission: 'administer neo4j configuration'
+
+neo4j_esync.settings:
+  path: '/admin/config/neo4j/esync/settings'
+  defaults:
+    _controller: '\Drupal\neo4j_esync\Controller\Settings::adminSettings'
+    _title: 'Neo4j Entity Sync settings'
+  requirements:
+    _permission: 'administer neo4j configuration'

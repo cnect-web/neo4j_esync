@@ -1,0 +1,68 @@
+<?php
+
+/**
+ * @file
+ * Contains neo4j_esync.module.
+ */
+
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Entity\EntityInterface;
+use GraphAware\Bolt\Exception\IOException;
+use GraphAware\Neo4j\Client\Client;
+use Psr\Log\LoggerInterface;
+
+/**
+ * Implements hook_help().
+ */
+function neo4j_esync_help($route_name, RouteMatchInterface $route_match) {
+  switch ($route_name) {
+    // Main module help for the neo4j_esync module.
+    case 'help.page.neo4j_esync':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('Neo4j Entity Sync') . '</p>';
+      return $output;
+
+    default:
+  }
+}
+
+/**
+ * Implements hook_entity_insert().
+ * @param  EntityInterface $entity A Drupal entity.
+ */
+function neo4j_esync_entity_insert(EntityInterface $entity) {
+  $entity_type = $entity->getEntityType()->id();
+  $entity_type_label = $entity->getEntityType()->getLabel();
+
+  $insert_types = ['user', 'node', 'comment'];
+  if (in_array($entity_type, $insert_types)) {
+    $client = \Drupal::service('neo4j.client');
+    $query = "CREATE ({$entity_type}:{$entity_type_label}) SET {$entity_type} += {parameters}";
+    $query_params = [
+      'parameters' => [
+        'name' => $entity->label(),
+        'drupal_entity_type' => $entity_type,
+        'bundle' => $entity->bundle(),
+        'id' => $entity->id(),
+      ]
+    ];
+    $client->run($query, $query_params);
+  }
+}
+
+/**
+ * Implements hook_entity_insert().
+ * @param  EntityInterface $entity A Drupal entity.
+ */
+function neo4j_esync_entity_delete(EntityInterface $entity) {
+  $entity_type = $entity->getEntityType()->id();
+  $entity_type_label = $entity->getEntityType()->getLabel();
+
+  $insert_types = ['user', 'node'];
+  if (in_array($entity_type, $insert_types)) {
+    $client = \Drupal::service('neo4j.client');
+    $query = "MATCH (n {drupal_entity_type: \"{$entity_type}\", id: \"{$entity->id()}\"}) DETACH DELETE n";
+    $client->run($query, $query_params);
+  }
+}
