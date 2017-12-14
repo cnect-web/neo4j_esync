@@ -51,7 +51,7 @@ function neo4j_esync_entity_insert(EntityInterface $entity) {
     ];
 
     // Invoke a hook to allow query params to be altered.
-    \Drupal::moduleHandler()->invokeAll('neo4j_esync_insert', array($entity_type, &$query_params));
+    \Drupal::moduleHandler()->invokeAll('neo4j_esync_insert', array($entity_type, $entity, &$query_params));
 
     $client->run($query, $query_params);
   }
@@ -78,7 +78,7 @@ function neo4j_esync_entity_update(EntityInterface $entity) {
     ];
 
     // Invoke a hook to allow query params to be altered.
-    \Drupal::moduleHandler()->invokeAll('neo4j_esync_update', array($entity_type, &$query_params));
+    \Drupal::moduleHandler()->invokeAll('neo4j_esync_update', array($entity_type, $entity, &$query_params));
 
     $max = count($query_params);
     foreach($query_params as $key => $value) {
