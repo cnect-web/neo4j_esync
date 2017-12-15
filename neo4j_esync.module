@@ -11,6 +11,7 @@ use Drupal\Component\Serialization\Json;
 use GraphAware\Bolt\Exception\IOException;
 use GraphAware\Neo4j\Client\Client;
 use Psr\Log\LoggerInterface;
+use Adadgio\GraphBundle\ORM\Cypher;
 
 /**
  * Implements hook_help().
@@ -33,28 +34,7 @@ function neo4j_esync_help($route_name, RouteMatchInterface $route_match) {
  * @param  EntityInterface $entity A Drupal entity.
  */
 function neo4j_esync_entity_insert(EntityInterface $entity) {
-  $entity_type = $entity->getEntityType()->id();
-  $entity_type_label = $entity->getEntityType()->getLabel();
-
-  $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
-
-  if (in_array($entity_type, $sync_entities)) {
-    $client = \Drupal::service('neo4j.client');
-    $query = "CREATE ({$entity_type}:{$entity_type_label}) SET {$entity_type} += {parameters}";
-    $query_params = [
-      'parameters' => [
-        'name' => $entity->label(),
-        'entity_type' => $entity_type,
-        'entity_id' => $entity->id(),
-        'bundle' => $entity->bundle(),
-      ]
-    ];
-
-    // Invoke a hook to allow query params to be altered.
-    \Drupal::moduleHandler()->invokeAll('neo4j_esync_insert', array($entity_type, $entity, &$query_params));
-
-    $client->run($query, $query_params);
-  }
+  _neo4j_esync_entity_insert_or_update($entity, 'insert');
 }
 
 /**
@@ -62,6 +42,13 @@ function neo4j_esync_entity_insert(EntityInterface $entity) {
  * @param  EntityInterface $entity A Drupal entity.
  */
 function neo4j_esync_entity_update(EntityInterface $entity) {
+  _neo4j_esync_entity_insert_or_update($entity, 'update');
+}
+
+/**
+ * Insert & Update queries are similar, so use this function instead.
+ */
+function _neo4j_esync_entity_insert_or_update(EntityInterface $entity, String $origin_hook) {
   $entity_type = $entity->getEntityType()->id();
   $entity_type_label = $entity->getEntityType()->getLabel();
 
@@ -69,28 +56,37 @@ function neo4j_esync_entity_update(EntityInterface $entity) {
 
   if (in_array($entity_type, $sync_entities)) {
     $client = \Drupal::service('neo4j.client');
-    $query = "MERGE ({$entity_type}:{$entity_type_label} {";
-    $query_params = [
-      'name' => $entity->label(),
-      'entity_type' => $entity_type,
+
+    $cypher = (new Cypher());
+
+    $keys = [
       'entity_id' => $entity->id(),
+      'entity_type' => $entity_type,
+    ];
+
+    // Overridable properties.
+    $props_update = [
+      'name' => $entity->label(),
       'bundle' => $entity->bundle(),
     ];
 
-    // Invoke a hook to allow query params to be altered.
-    \Drupal::moduleHandler()->invokeAll('neo4j_esync_update', array($entity_type, $entity, &$query_params));
-
-    $max = count($query_params);
-    foreach($query_params as $key => $value) {
-      $val = Json::encode($value);
-      $query .= $key .":{$val}";
-      if ($max-- > 1) {
-        $query .= ',';
-      }
+    $hook = "neo4j_esync_{$origin_hook}";
+    \Drupal::moduleHandler()->invokeAll($hook, array($entity_type, $entity, &$props_update));
+    /**
+     * @todo: Throw exception if trying to update one of the key fields.
+     */
+    if (isset($props_update['entity_id']) || isset($props_update['entity_type'])) {
+      drupal_set_message($this->t("You cannot update the entity keys."));
     }
-    $query .= "})";
+    else {
+      $query = (new Cypher())
+        ->merge('gn', $entity_type_label, $keys)
+        ->onCreateSet('gn', $props_update)
+        ->onMatchSet('gn', $props_update)
+        ->getQuery();
 
-    $client->run($query, $query_params);
+      $client->run($query);
+    }
   }
 }
 
@@ -105,27 +101,18 @@ function neo4j_esync_entity_delete(EntityInterface $entity) {
   // Maybe not needed to check?
   $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
   if (in_array($entity_type, $sync_entities)) {
+
     $client = \Drupal::service('neo4j.client');
-    $query_params = [
+    $keys = [
       "entity_type" => $entity_type,
       "entity_id" => $entity->id(),
     ];
 
-    // Invoke a hook to allow params to be altered.
-    \Drupal::moduleHandler()->invokeAll('neo4j_esync_delete', array($entity_type, &$query_params));
+    $query = (new Cypher())
+      ->match('gn', $entity_type_label, $keys)
+      ->getQuery() . " DETACH DELETE gn";
 
-    $max = count($query_params);
+    $client->run($query);
 
-    $query = "MATCH (n {";
-    foreach($query_params as $key => $value) {
-      $val = Json::encode($value);
-      $query .= $key .":{$val}";
-      if ($max-- > 1) {
-        $query .= ',';
-      }
-    }
-    $query .= "}) DETACH DELETE n";
-
-    $client->run($query, $query_params);
   }
 }
