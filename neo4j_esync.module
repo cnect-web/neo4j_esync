@@ -50,7 +50,7 @@ function neo4j_esync_entity_update(EntityInterface $entity) {
  */
 function _neo4j_esync_entity_insert_or_update(EntityInterface $entity, String $origin_hook) {
   $entity_type = $entity->getEntityType()->id();
-  $entity_type_label = $entity->getEntityType()->getLabel();
+  $entity_type_label = $entity->getEntityTypeId();
 
   $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
 
@@ -96,7 +96,7 @@ function _neo4j_esync_entity_insert_or_update(EntityInterface $entity, String $o
  */
 function neo4j_esync_entity_delete(EntityInterface $entity) {
   $entity_type = $entity->getEntityType()->id();
-  $entity_type_label = $entity->getEntityType()->getLabel();
+  $entity_type_label = $entity->getEntityTypeId();
 
   // Maybe not needed to check?
   $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
@@ -116,3 +116,7 @@ function neo4j_esync_entity_delete(EntityInterface $entity) {
 
   }
 }
+
+/**
+ * @todo: Implement cron sync.
+ */
