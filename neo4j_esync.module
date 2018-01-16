@@ -11,6 +11,7 @@ use Drupal\Component\Serialization\Json;
 use GraphAware\Bolt\Exception\IOException;
 use GraphAware\Neo4j\Client\Client;
 use Psr\Log\LoggerInterface;
+use Drupal\taxonomy\Entity\Vocabulary;
 use Adadgio\GraphBundle\ORM\Cypher;
 
 /**
@@ -54,38 +55,75 @@ function _neo4j_esync_entity_insert_or_update(EntityInterface $entity, String $o
 
   $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
 
-  if (in_array($entity_type, $sync_entities)) {
-    $client = \Drupal::service('neo4j.client');
+  // Exclude some entities from the DB.
+  if ($entity_type == 'user' && $entity->id() == 1) {
+    // Do nothing.
+  }
+  else {
+    if (in_array($entity_type, $sync_entities)) {
+      $client = \Drupal::service('neo4j.client');
+      $cypher = (new Cypher());
+      $props_update = [];
+      $vid_update = NULL;
+      switch ($entity_type) {
+        case 'user':
+          $keys = [
+            'email' => $entity->getEmail(),
+            'entity_type' => $entity_type,
+          ];
+          $props_update['entity_id'] = $entity->id();
+          break;
 
-    $cypher = (new Cypher());
+        case 'taxonomy_vocabulary':
+          $vid_update = $entity->get('vid');
+          break;
 
-    $keys = [
-      'entity_id' => $entity->id(),
-      'entity_type' => $entity_type,
-    ];
+        case 'taxonomy_term':
+          $vid_update = $entity->getVocabularyId();
+          break;
 
-    // Overridable properties.
-    $props_update = [
-      'name' => $entity->label(),
-      'bundle' => $entity->bundle(),
-    ];
+        default:
+          $keys = [
+            'entity_id' => $entity->id(),
+            'entity_type' => $entity_type,
+          ];
+          break;
+      }
 
-    $hook = "neo4j_esync_{$origin_hook}";
-    \Drupal::moduleHandler()->invokeAll($hook, array($entity_type, $entity, &$props_update));
-    /**
-     * @todo: Throw exception if trying to update one of the key fields.
-     */
-    if (isset($props_update['entity_id']) || isset($props_update['entity_type'])) {
-      drupal_set_message($this->t("You cannot update the entity keys."));
-    }
-    else {
-      $query = (new Cypher())
-        ->merge('gn', $entity_type_label, $keys)
-        ->onCreateSet('gn', $props_update)
-        ->onMatchSet('gn', $props_update)
-        ->getQuery();
+      // Overridable properties.
+      $props_update += [
+        'name' => $entity->label(),
+        'bundle' => $entity->bundle(),
+      ];
 
-      $client->run($query);
+      $hook = "neo4j_esync_{$origin_hook}";
+      \Drupal::moduleHandler()->invokeAll($hook, array($entity_type, $entity, &$props_update));
+      /**
+       * @todo: Throw exception if trying to update one of the key fields.
+       */
+
+      if ((isset($props_update['entity_id']) && $entity_type != 'user') || isset($props_update['entity_type'])) {
+        drupal_set_message(t("You cannot update the entity keys."));
+      }
+      else {
+        if (!$vid_update) {
+          $query = (new Cypher())
+            ->merge('gn', $entity_type_label, $keys)
+            ->onCreateSet('gn', $props_update)
+            ->onMatchSet('gn', $props_update)
+            ->getQuery();
+
+          try {
+            $client->run($query);
+          }
+          catch (Exception $e) {
+            watchdog_exception('Neo4j Esync', $e);
+          }
+        }
+        else {
+          _neo4j_update_taxonomy_vocabulary($vid_update);
+        }
+      }
     }
   }
 }
@@ -112,7 +150,12 @@ function neo4j_esync_entity_delete(EntityInterface $entity) {
       ->match('gn', $entity_type_label, $keys)
       ->getQuery() . " DETACH DELETE gn";
 
-    $client->run($query);
+    try {
+      $client->run($query);
+    }
+    catch (Exception $e) {
+      watchdog_exception('Neo4j Esync', $e);
+    }
 
   }
 }
@@ -120,3 +163,77 @@ function neo4j_esync_entity_delete(EntityInterface $entity) {
 /**
  * @todo: Implement cron sync.
  */
+function neo4j_esync_cron() {
+  // Update taxonomies.
+  _neo4j_update_taxonomy_vocabulary();
+}
+
+
+function _neo4j_update_taxonomy_vocabulary($vid = NULL) {
+  if ($vid) {
+    $vocabularies[] = taxonomy_vocabulary_load($vid);
+  }
+  else {
+    $vocabularies = Vocabulary::loadMultiple();
+  }
+
+  $client = \Drupal::service('neo4j.client');
+  $tx = $client->transaction();
+
+  $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
+
+  if (in_array("taxonomy_term", $sync_entities)) {
+    foreach ($vocabularies as $vocabulary) {
+
+      $stack = $client->stack();
+      $terms =\Drupal::entityTypeManager()->getStorage('taxonomy_term')->loadTree($vocabulary->get('vid'));
+
+      $keys = ['entity_type' => 'taxonomy_term'];
+
+      foreach ($terms as $term) {
+        $props_update = [];
+        $entity = entity_load('taxonomy_term', $term->tid);
+        $keys['entity_id'] = $term->tid;
+        $props_update += [
+          'name' => $entity->label(),
+          'bundle' => $entity->bundle(),
+        ];
+
+        // Insert/update term.
+        $statement = (new Cypher())
+          ->merge('gn', 'taxonomy_term', $keys)
+          ->onCreateSet('gn', $props_update)
+          ->onMatchSet('gn', $props_update)
+          ->getQuery();
+        $stack->push($statement);
+
+        // Add the relationship to vocabulary.
+        $statement = (new Cypher())
+          ->match('v', 'taxonomy_vocabulary', array('entity_id' => $vocabulary->get('vid')))
+          ->match('t1', 'taxonomy_term', array('entity_id' => $term->tid))
+          ->getQuery();
+        $statement .= " MERGE (t1)-[:BELONGS_TO]->(v)";
+        $stack->push($statement);
+
+      }
+
+      // Add the relationships to parent.
+      foreach ($terms as $term) {
+        foreach ($term->parents as $pid) {
+          if ($pid != 0) {
+            $statement = (new Cypher())
+              ->match('t', 'taxonomy_term', array('entity_id' => $term->tid))
+              ->match('t1', 'taxonomy_term', array('entity_id' => $pid))
+              ->getQuery();
+            $statement .= " MERGE (t)<-[:PARENT]-(t1)";
+            $stack->push($statement);
+          }
+        }
+      }
+      if ($stack->size() > 0) {
+        $tx->pushStack($stack);
+      }
+      $tx->commit();
+    }
+  }
+}
