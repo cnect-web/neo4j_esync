@@ -49,43 +49,71 @@ function neo4j_esync_entity_update(EntityInterface $entity) {
  * Insert & Update queries are similar, so use this function instead.
  */
 function _neo4j_esync_entity_insert_or_update(EntityInterface $entity, String $origin_hook) {
-  $entity_type = $entity->getEntityType()->id();
-  $entity_type_label = $entity->getEntityTypeId();
 
-  $sync_entities = \Drupal::config('neo4j_esync.settings')->get('entities_to_sync');
+  if ($entity_type == 'user' && $entity->id() == 1) {
+    // Do nothing.
+  }
+  else {
+    if (in_array($entity_type, $sync_entities)) {
+      $client = \Drupal::service('neo4j.client');
+      $cypher = (new Cypher());
+      $props_update = [];
+      $vid_update = NULL;
+      switch ($entity_type) {
+        case 'user':
+          $keys = [
+            'email' => $entity->getEmail(),
+            'entity_type' => $entity_type,
+          ];
+          $props_update['entity_id'] = $entity->id();
+          break;
 
-  if (in_array($entity_type, $sync_entities)) {
-    $client = \Drupal::service('neo4j.client');
+        case 'taxonomy_term':
+          $vid_update = $entity->getVocabularyId();
+          break;
 
-    $cypher = (new Cypher());
+        default:
+          $keys = [
+            'entity_id' => $entity->id(),
+            'entity_type' => $entity_type,
+          ];
+          break;
+      }
 
-    $keys = [
-      'entity_id' => $entity->id(),
-      'entity_type' => $entity_type,
-    ];
+      // Overridable properties.
+      $props_update += [
+        'name' => $entity->label(),
+        'bundle' => $entity->bundle(),
+      ];
 
-    // Overridable properties.
-    $props_update = [
-      'name' => $entity->label(),
-      'bundle' => $entity->bundle(),
-    ];
+      $hook = "neo4j_esync_{$origin_hook}";
+      \Drupal::moduleHandler()->invokeAll($hook, array($entity_type, $entity, &$props_update));
+      /**
+       * @todo: Throw exception if trying to update one of the key fields.
+       */
 
-    $hook = "neo4j_esync_{$origin_hook}";
-    \Drupal::moduleHandler()->invokeAll($hook, array($entity_type, $entity, &$props_update));
-    /**
-     * @todo: Throw exception if trying to update one of the key fields.
-     */
-    if (isset($props_update['entity_id']) || isset($props_update['entity_type'])) {
-      drupal_set_message($this->t("You cannot update the entity keys."));
-    }
-    else {
-      $query = (new Cypher())
-        ->merge('gn', $entity_type_label, $keys)
-        ->onCreateSet('gn', $props_update)
-        ->onMatchSet('gn', $props_update)
-        ->getQuery();
+      if ((isset($props_update['entity_id']) && $entity_type != 'user') || isset($props_update['entity_type'])) {
+        drupal_set_message(t("You cannot update the entity keys."));
+      }
+      else {
+        if (!$vid_update) {
+          $query = (new Cypher())
+            ->merge('gn', $entity_type_label, $keys)
+            ->onCreateSet('gn', $props_update)
+            ->onMatchSet('gn', $props_update)
+            ->getQuery();
 
-      $client->run($query);
+          try {
+            $client->run($query);
+          }
+          catch (Exception $e) {
+            watchdog_exception('Neo4j Esync', $e);
+          }
+        }
+        else {
+          _neo4j_update_taxonomy_vocabulary($vid_update);
+        }
+      }
     }
   }
 }
